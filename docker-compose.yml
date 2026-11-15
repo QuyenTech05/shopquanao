@@ -154,6 +154,7 @@ services:
         condition: service_healthy
 
   reranker:
+    image: ${RERANKER_IMAGE:-shop_quan_ao-reranker:latest}
     build:
       context: docker/reranker
       dockerfile: Dockerfile
@@ -171,6 +172,7 @@ services:
     # No GPU needed — CPU inference only.
 
   rag-ml:
+    image: ${RAG_ML_IMAGE:-shop_quan_ao-rag-ml:latest}
     build:
       context: docker/rag-ml
       dockerfile: Dockerfile
