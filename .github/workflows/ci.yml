@@ -484,7 +484,21 @@ jobs:
             fi
             echo ".env written ($(wc -l < .env) lines)"
 
+            # The previous deployment may have enabled this profile. Stop only
+            # its containers when it is now disabled; keep all data volumes.
+            if ! grep -qx 'LANGFUSE_ENABLED=true' .env; then
+              docker compose --profile observability stop langfuse-web langfuse-worker langfuse-postgres langfuse-clickhouse langfuse-minio langfuse-redis
+              docker compose --profile observability rm -f langfuse-web langfuse-worker langfuse-postgres langfuse-clickhouse langfuse-minio langfuse-redis
+            fi
+
             FREE_MB=$(df -Pm / | awk 'NR==2 {print $4}')
+            if [ "${FREE_MB:-0}" -lt 6000 ]; then
+              # Reclaim unused layers and build cache only when necessary; do
+              # not remove volumes or images used by the running application.
+              docker builder prune -af
+              docker image prune -af
+              FREE_MB=$(df -Pm / | awk 'NR==2 {print $4}')
+            fi
             if [ "${FREE_MB:-0}" -lt 6000 ]; then
               echo "❌ Need at least 6000MB free to pull images; available: ${FREE_MB}MB."
               exit 1
