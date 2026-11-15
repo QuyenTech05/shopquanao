@@ -6,7 +6,7 @@
 # tokenizers: no torch, no transformers model code, ~1.5 GB smaller image
 # and a much smaller resident set than the previous PyTorch runtime.
 #
-# The models live in a volume ($MODELS_DIR) so a restart does not re-export.
+# Models are baked into the runtime image; restarts do not re-export them.
 # ============================================================
 
 # ── Stage 1: export models to ONNX FP16 (needs torch) ──────
@@ -62,7 +62,7 @@ RUN apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Models exported in stage 1; the volume mounted at /models/onnx keeps them across restarts.
+# Models exported in stage 1 are kept in the runtime image.
 COPY --from=exporter /models/onnx /models/onnx
 
 COPY app.py /app/app.py

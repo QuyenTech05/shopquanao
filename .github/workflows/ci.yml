@@ -242,6 +242,8 @@ jobs:
           cp .env.example .env
           docker compose config --quiet
           docker compose --profile observability config --quiet
+          # A volume at /models hides updated weights baked into the image.
+          docker compose config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]["rag-ml"]; assert not any(m["target"] in ("/models", "/models/onnx") for m in s.get("volumes", [])), "model image is masked by a volume"'
 
       - name: Build app image
         run: |
@@ -401,7 +403,7 @@ jobs:
             echo "LLM_TIMEOUT=${{ secrets.LLM_TIMEOUT || '25' }}" >> .env
             echo "MARIADB_ROOT_PASSWORD=${{ secrets.MARIADB_ROOT_PASSWORD }}" >> .env
             echo "DB_PASS=${{ secrets.DB_PASS }}" >> .env
-            echo "MARIADB_BUFFER_POOL_SIZE=${{ secrets.MARIADB_BUFFER_POOL_SIZE || '1G' }}" >> .env
+            echo "MARIADB_BUFFER_POOL_SIZE=${{ secrets.MARIADB_BUFFER_POOL_SIZE || '256M' }}" >> .env
             echo "PMA_PASSWORD=${{ secrets.PMA_PASSWORD || '' }}" >> .env
             echo "RERANKER_URL=http://reranker:8000" >> .env
             echo "RAG_ML_WARMUP_ON_START=${{ secrets.RAG_ML_WARMUP_ON_START || 'true' }}" >> .env
