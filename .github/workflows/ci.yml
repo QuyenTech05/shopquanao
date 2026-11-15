@@ -231,6 +231,9 @@ jobs:
     name: Docker Build
     needs: [code-quality]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
 
@@ -244,6 +247,7 @@ jobs:
           docker compose --profile observability config --quiet
           # A volume at /models hides updated weights baked into the image.
           docker compose config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]["rag-ml"]; assert not any(m["target"] in ("/models", "/models/onnx") for m in s.get("volumes", [])), "model image is masked by a volume"'
+          APP_IMAGE=example.invalid/app:sha CHAT_GRAPH_IMAGE=example.invalid/chat-graph:sha RERANKER_IMAGE=example.invalid/reranker:sha RAG_ML_IMAGE=example.invalid/rag-ml:sha docker compose config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; assert all(s[n]["image"] == "example.invalid/"+n+":sha" for n in ("app", "chat-graph", "reranker", "rag-ml"))'
 
       - name: Build app image
         run: |
@@ -297,6 +301,26 @@ jobs:
             --exit-code 0 \
             shop-rag-ml:ci-${{ github.sha }} || echo "⚠️ Trivy scan done"
 
+      - name: Publish commit images to GHCR
+        if: github.event_name == 'push'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          IMAGE_SHA: ${{ github.sha }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -eu
+          image_base="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          for service in app reranker chat-graph rag-ml; do
+            case "$service" in
+              app) local_image=shop-quan-ao ;;
+              *) local_image="shop-$service" ;;
+            esac
+            docker tag "$local_image:ci-$IMAGE_SHA" "$image_base/$service:$IMAGE_SHA"
+            docker push "$image_base/$service:$IMAGE_SHA"
+          done
+
   # ============================================================
   # Job 6: Deploy to Production (main/master only)
   # ============================================================
@@ -305,6 +329,9 @@ jobs:
     needs: [unit-tests, integration-tests, security, docker]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     environment: production
     steps:
       - uses: actions/checkout@v5
@@ -319,6 +346,10 @@ jobs:
         timeout-minutes: 30
         env:
           GITHUB_TOKEN: ${{ secrets.DEPLOY_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_REPOSITORY: ${{ github.repository }}
+          DEPLOY_SHA: ${{ github.sha }}
           REPO: ${{ secrets.DEPLOY_PATH }}
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -329,7 +360,7 @@ jobs:
           script_stop: true
           timeout: 60s
           command_timeout: 60m
-          envs: GITHUB_TOKEN,REPO
+          envs: GITHUB_TOKEN,REGISTRY_TOKEN,REGISTRY_USER,IMAGE_REPOSITORY,DEPLOY_SHA,REPO
           script: |
             set -e
             REPO_PATH="$REPO"
@@ -381,19 +412,10 @@ jobs:
             git stash --include-untracked || true
             git remote set-url origin "$REPO_URL"
 
-            # Detect default branch
-            echo "Fetching origin..."
-            git fetch origin --prune 2>&1 || true
-            DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | grep "HEAD branch" | cut -d" " -f5 || echo "")
-            if [ -z "$DEFAULT_BRANCH" ]; then
-              DEFAULT_BRANCH="main"
-            fi
-            echo "Branch: $DEFAULT_BRANCH"
-
-            # Hard reset
-            git fetch origin "$DEFAULT_BRANCH"
-            git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout -b "$DEFAULT_BRANCH"
-            git reset --hard "origin/$DEFAULT_BRANCH"
+            # Deploy exactly the commit whose images passed this workflow.
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            git reset --hard "$DEPLOY_SHA"
             echo "✅ Repo: $(git rev-parse --short HEAD)"
 
             # Write .env
@@ -413,6 +435,11 @@ jobs:
             echo "CLIENT_CACHE_TTL=60" >> .env
             echo "CLIENT_CACHE_STALE_TTL=30" >> .env
             echo "APP_ENV=production" >> .env
+            IMAGE_BASE="ghcr.io/$(printf '%s' "$IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+            echo "APP_IMAGE=$IMAGE_BASE/app:$DEPLOY_SHA" >> .env
+            echo "RERANKER_IMAGE=$IMAGE_BASE/reranker:$DEPLOY_SHA" >> .env
+            echo "RAG_ML_IMAGE=$IMAGE_BASE/rag-ml:$DEPLOY_SHA" >> .env
+            echo "CHAT_GRAPH_IMAGE=$IMAGE_BASE/chat-graph:$DEPLOY_SHA" >> .env
             # Observability is opt-in and independent of the agent path. The
             # profile starts only when deployment secrets explicitly enable it.
             echo "LANGFUSE_ENABLED=${{ secrets.LANGFUSE_ENABLED || 'false' }}" >> .env
@@ -457,57 +484,29 @@ jobs:
             fi
             echo ".env written ($(wc -l < .env) lines)"
 
-            echo "Stopping current stack before cleanup..."
-            docker compose down --remove-orphans 2>/dev/null || true
-
-            echo "=== Disk before project cleanup ==="
-            df -h / | tail -1
-            docker system df || true
-
-            # Aggressive cleanup for small VPS disks. This preserves named
-            # volumes such as db_data/qdrant_data/hf_cache because --volumes is
-            # intentionally not used.
-            docker container prune -f 2>/dev/null || true
-            docker image prune -af 2>/dev/null || true
-            docker builder prune -af 2>/dev/null || true
-            docker system prune -af 2>/dev/null || true
-
-            echo "=== Disk after project cleanup ==="
-            df -h / | tail -1
-            docker system df || true
-
             FREE_MB=$(df -Pm / | awk 'NR==2 {print $4}')
             if [ "${FREE_MB:-0}" -lt 6000 ]; then
-              echo "❌ Not enough free disk after Docker cleanup: ${FREE_MB}MB."
-              echo "Need at least 6000MB for MariaDB/Nginx/Redis/Qdrant plus app/reranker/chat-graph/rag-ml image build."
-              echo "Manual fix on server:"
-              echo "  docker compose down --remove-orphans || true"
-              echo "  docker system prune -af"
-              echo "  docker builder prune -af"
-              echo "  df -h /"
+              echo "❌ Need at least 6000MB free to pull images; available: ${FREE_MB}MB."
               exit 1
             fi
 
-            # Build images (cache-aware)
-            echo "Building images..."
-            docker compose build reranker
-            docker compose build rag-ml
-            docker compose build chat-graph
-            docker compose build app
-
-            echo "Pulling runtime base images..."
-            docker compose pull nginx db redis qdrant
+            # Isolate the short-lived registry credential from the host's Docker config.
+            export DOCKER_CONFIG="$(mktemp -d)"
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -f "$DOCKER_CONFIG/config.json"; rmdir "$DOCKER_CONFIG" 2>/dev/null || true' EXIT
+            printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+            echo "Pulling images built by GitHub Actions..."
+            docker compose pull
 
             # Apply migrations before app/workers are allowed to start. The
             # named DB volume is preserved by the cleanup above.
             echo "Starting migration dependencies..."
             docker compose up -d --wait db redis
             echo "Applying database migrations..."
-            docker compose run --rm --no-deps app php scripts/run_database_migrations.php
+            docker compose run --pull never --rm --no-deps app php scripts/run_database_migrations.php
 
             # Deploy
             echo "Starting application containers..."
-            docker compose up -d --remove-orphans
+            docker compose up -d --no-build --remove-orphans
 
             # Healthcheck with extended timeout for rag-ml model warmup.
             echo "Waiting for app (up to 300s)..."
