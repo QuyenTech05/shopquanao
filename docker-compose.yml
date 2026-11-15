@@ -190,10 +190,8 @@ services:
       HF_HOME: /models/huggingface
     expose:
       - "8000"
-    volumes:
-      # Model weights are baked into the image at build time; the volume only keeps
-      # the HF download cache so a rebuild on the host reuses it.
-      - rag_ml_models:/models
+    # Model weights are baked into the image. Do not mount a persistent volume
+    # over /models: it would retain old weights and hide updated image contents.
     # Measured with the ONNX fp16 runtime: ~600 MB resident for both models.
     # The cap keeps the sidecar from starving MariaDB/php-fpm on a small VPS.
     deploy:
@@ -452,7 +450,6 @@ volumes:
   redis_data:
   qdrant_data:
   hf_cache:
-  rag_ml_models:
   langfuse_clickhouse_data_v2:
   langfuse_clickhouse_logs_v2:
   langfuse_minio_data:
