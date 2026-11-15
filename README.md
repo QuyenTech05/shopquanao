@@ -2,6 +2,8 @@
 
 Website bán quần áo (PHP 8.2, MariaDB 10.11, Docker Compose) kèm trợ lý chat AI. Chatbot là một agent LangGraph (`chat-graph/`, TypeScript): mô hình ngôn ngữ chọn công cụ trong 11 công cụ chỉ đọc của shop, còn các luật cứng do code đảm bảo: không đặt hàng hay thanh toán thay khách, thẻ sản phẩm và giá phải khớp dữ liệu thật, giới hạn số lượt gọi.
 
+Website: [hostshop.work.gd](http://hostshop.work.gd/).
+
 ## Mục lục
 
 - [Chức năng](#chức-năng)
@@ -230,13 +232,13 @@ Quy trình:
 2. Tạo PR `release/vX.Y` vào `master` có nội dung đúng bằng `develop`, chờ CI xanh rồi merge.
 3. Merge vào `master` sẽ chạy job **Deploy to Production**.
 
-CI (`.github/workflows/ci.yml`) gồm các job: Code Quality (composer validate, lint PHP, PHPStan, test và build `mcp-server` và `chat-graph`), Unit Tests, Integration Tests (import schema, chạy migration trước), Security Scan, Docker Build (`app`, `chat-graph`, `reranker`, `rag-ml`), rồi Deploy.
+CI (`.github/workflows/ci.yml`) gồm các job: Code Quality (composer validate, lint PHP, PHPStan, test và build `mcp-server` và `chat-graph`), Unit Tests, Integration Tests (import schema, chạy migration trước), Security Scan, Docker Build (`app`, `chat-graph`, `reranker`, `rag-ml`), rồi Deploy. Khi push lên nhánh chính, GitHub Actions publish các image lên GitHub Container Registry với tag là SHA của commit.
 
 Job Deploy vào máy chủ qua SSH và chạy theo thứ tự:
 
-1. Cập nhật mã nguồn.
+1. Checkout đúng commit đã build.
 2. Ghi lại `.env` từ GitHub secrets.
-3. Build image.
+3. Pull image theo SHA từ GitHub Container Registry; VPS không build image.
 4. Chờ DB và Redis healthy, chạy migration; migration lỗi thì dừng.
 5. Bật stack.
 6. Index tài liệu vào Qdrant.
