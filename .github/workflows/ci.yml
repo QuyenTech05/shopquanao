@@ -246,6 +246,8 @@ jobs:
           cp .env.example .env
           docker compose config --quiet
           docker compose --profile observability config --quiet
+          docker compose config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]["rag-ml"]; assert not any(m["target"] in ("/models", "/models/onnx") for m in s.get("volumes", [])), "model image is masked by a volume"'
+          APP_IMAGE=example.invalid/app:sha CHAT_GRAPH_IMAGE=example.invalid/chat-graph:sha RERANKER_IMAGE=example.invalid/reranker:sha RAG_ML_IMAGE=example.invalid/rag-ml:sha docker compose config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; assert all(s[n]["image"] == "example.invalid/"+n+":sha" for n in ("app", "chat-graph", "reranker", "rag-ml"))'
           docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
           test "$(docker compose -f docker-compose.yml -f docker-compose.production.yml config --services | sort)" = "$(printf '%s\n' app chat-graph db nginx qdrant rag-ml redis reranker)"
 
@@ -275,34 +277,34 @@ jobs:
 
       - name: Scan app image
         run: |
-          docker run --rm aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-quan-ao:ci-${{ github.sha }}
 
       - name: Scan reranker image
         run: |
-          docker run --rm aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-reranker:ci-${{ github.sha }}
 
       - name: Scan chat-graph image
         run: |
-          docker run --rm aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-chat-graph:ci-${{ github.sha }}
 
       - name: Scan rag-ml image
         run: |
-          docker run --rm aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-rag-ml:ci-${{ github.sha }}
 
-      - name: Publish tested production images
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      - name: Publish tested commit images
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
