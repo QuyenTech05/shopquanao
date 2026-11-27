@@ -1,7 +1,7 @@
 <?php
 
 
-/** Reranks product search results via the Python TF-IDF sidecar; falls back to original order. */
+/** Ranks a bounded set of product candidates; falls back to original order. */
 final class ProductReranker
 {
     /** Tối thiểu bao nhiêu kết quả thì kích hoạt rerank */
@@ -13,7 +13,7 @@ final class ProductReranker
     private const RERANK_MAX_ITEMS = 20;
 
     /** @param ?string $url sidecar base URL (`/rerank` is appended); null disables the reranker */
-    public function __construct(private ?string $url)
+    public function __construct(private ?string $url, private string $mode = 'tfidf')
     {
     }
 
@@ -33,30 +33,23 @@ final class ProductReranker
         $texts = array_values($texts); // re-index
 
         try {
-            $sorted = $this->callReranker($query, $texts);
+            $sorted = $this->mode === 'bm25'
+                ? $this->rankBm25($query, $texts)
+                : $this->callReranker($query, $texts);
             if ($sorted === null) {
                 return $result; // fallback
             }
 
-            // Sắp xếp lại products theo sorted indices (chỉ phần được rerank)
-            $reranked = [];
-            $rerankedKeys = [];
-            foreach ($sorted as $idx) {
-                if (isset($productsToRerank[$idx])) {
-                    $key = array_search($productsToRerank[$idx], $result["products"], true);
-                    if ($key !== false) {
-                        $rerankedKeys[$key] = true;
-                        $reranked[] = $result["products"][$key];
-                    }
-                }
+            // Require a complete permutation before changing any product card.
+            $expected = range(0, count($texts) - 1);
+            $indices = $sorted;
+            sort($indices, SORT_NUMERIC);
+            if ($indices !== $expected) {
+                return $result;
             }
-
-            // Giữ lại các sản phẩm không được rerank (giữ nguyên thứ tự)
-            foreach ($result["products"] as $i => $p) {
-                if (!isset($rerankedKeys[$i])) {
-                    $reranked[] = $p;
-                }
-            }
+            $candidates = array_values($productsToRerank);
+            $reranked = array_map(fn($index) => $candidates[$index], $sorted);
+            $reranked = array_merge($reranked, array_slice($result['products'], self::RERANK_MAX_ITEMS));
 
             $result["products"] = $reranked;
         } catch (Throwable $e) {
@@ -64,6 +57,58 @@ final class ProductReranker
         }
 
         return $result;
+    }
+
+    /** BM25 over the at most 20 already filtered names; no catalog-wide index or HTTP request. */
+    private function rankBm25(string $query, array $texts): array
+    {
+        $queryTerms = array_unique($this->terms($query));
+        $documents = array_map(fn($text) => $this->terms($text), $texts);
+        $frequencies = array_map('array_count_values', $documents);
+        $count = count($documents);
+        $averageLength = max(1.0, array_sum(array_map('count', $documents)) / $count);
+        $scores = array_fill(0, $count, 0.0);
+        $k1 = 1.2;
+        $b = 0.75;
+        foreach ($queryTerms as $term) {
+            // Long partial words (e.g. "jean" -> "jeans") match word prefixes.
+            $termFrequencies = array_map(function ($tf) use ($term) {
+                $total = 0;
+                foreach ($tf as $word => $frequency) {
+                    if ((string)$word === $term || (mb_strlen($term) >= 4 && str_starts_with((string)$word, $term))) {
+                        $total += $frequency;
+                    }
+                }
+                return $total;
+            }, $frequencies);
+            $df = count(array_filter($termFrequencies));
+            $idf = log(1 + ($count - $df + 0.5) / ($df + 0.5));
+            foreach ($termFrequencies as $index => $frequency) {
+                $lengthNorm = 1 - $b + $b * count($documents[$index]) / $averageLength;
+                $scores[$index] += $idf * ($frequency * ($k1 + 1)) / ($frequency + $k1 * $lengthNorm);
+            }
+        }
+        $normalizedQuery = trim(ProductAttributeNormalizer::normalizeText($query));
+        if ($normalizedQuery !== '') {
+            foreach ($texts as $index => $text) {
+                $normalized = trim(ProductAttributeNormalizer::normalizeText($text));
+                // Prefer an exact name, then a contiguous phrase; maintain SQL ordering on ties.
+                if ($normalized === $normalizedQuery) {
+                    $scores[$index] += 4.0;
+                } elseif (str_contains(' ' . $normalized . ' ', ' ' . $normalizedQuery . ' ')) {
+                    $scores[$index] += 2.0;
+                }
+            }
+        }
+        $indices = array_keys($scores);
+        usort($indices, fn($a, $b) => ($scores[$b] <=> $scores[$a]) ?: ($a <=> $b));
+        return $indices;
+    }
+
+    private function terms(string $text): array
+    {
+        $normalized = trim(ProductAttributeNormalizer::normalizeText($text));
+        return preg_split('/\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY) ?: [];
     }
 
     /**

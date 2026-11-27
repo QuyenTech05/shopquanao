@@ -222,7 +222,12 @@ The old PHP trace outbox (its table, the PHP classes, the publisher script and t
 publisher Compose service) was removed because nothing had written to it since the
 PHP chat pipeline went away. A drop migration (2026-11-03) removes the table.
 
-For CI/CD, set these repository environment secrets before setting
+For production Cloud mode, use the HTTPS origin of the project region for both
+`LANGFUSE_PUBLIC_URL` and `LANGFUSE_INGESTION_URL`. Leave the observability
+Compose profile disabled. The self-hosted credentials below are only required
+for a self-hosted deployment.
+
+For self-hosted CI/CD, set these repository environment secrets before setting
 `LANGFUSE_ENABLED=true`: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
 `LANGFUSE_POSTGRES_PASSWORD`, `LANGFUSE_REDIS_PASSWORD`,
 `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_MINIO_SECRET_KEY`, `LANGFUSE_SALT`,

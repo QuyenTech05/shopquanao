@@ -25,6 +25,8 @@ final readonly class ServiceConfig
         public ?string $rerankerUrl = null,
         public int $freeShippingThreshold = 500000,
         public int $freeshipNudgeMaxGap = 200000,
+        public string $knowledgeRerankMode = 'cross_encoder',
+        public ?string $ragMlToken = null,
     ) {
     }
 
@@ -46,7 +48,29 @@ final readonly class ServiceConfig
             rerankerUrl: self::env('RERANKER_URL') ?? 'http://reranker:8000',
             freeShippingThreshold: max(0, self::intEnvWithFallback('FREE_SHIPPING_THRESHOLD', 500000)),
             freeshipNudgeMaxGap: max(0, self::intEnvWithFallback('FREESHIP_NUDGE_MAX_GAP', 200000)),
+            knowledgeRerankMode: self::knowledgeRerankModeFromEnvironment(),
+            ragMlToken: self::env('RAG_ML_TOKEN'),
         );
+    }
+
+    public static function productRankerModeFromEnvironment(): string
+    {
+        $mode = self::env('PRODUCT_RANKER_MODE') ?? 'tfidf';
+        if (!in_array($mode, ['tfidf', 'bm25'], true)) {
+            error_log('Invalid PRODUCT_RANKER_MODE; using tfidf');
+            return 'tfidf';
+        }
+        return $mode;
+    }
+
+    public static function knowledgeRerankModeFromEnvironment(): string
+    {
+        $mode = self::env('KNOWLEDGE_RERANK_MODE') ?? 'cross_encoder';
+        if (!in_array($mode, ['cross_encoder', 'rrf'], true)) {
+            error_log('Invalid KNOWLEDGE_RERANK_MODE; using cross_encoder');
+            return 'cross_encoder';
+        }
+        return $mode;
     }
 
     /** getenv only; unset or empty is null. */

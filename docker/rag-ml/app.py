@@ -13,6 +13,7 @@ Behaviour kept from the previous implementation: warmup on start, an optional ke
 (weights are mmap'd by ORT, but a periodic tiny inference keeps the pages hot), normalised
 embeddings, and NaN/Inf scores coerced to 0.0.
 """
+import hmac
 import math
 import os
 import threading
@@ -22,7 +23,7 @@ from typing import Any
 
 import numpy as np
 import onnxruntime as ort
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer
 
@@ -40,7 +41,18 @@ THREADS = int(os.getenv("RAG_ML_THREADS", "0"))  # 0 = let ORT decide from the h
 WARMUP_ON_START = os.getenv("RAG_ML_WARMUP_ON_START", "true").lower() in {"1", "true", "yes", "on"}
 KEEPWARM_SECONDS = int(os.getenv("RAG_ML_KEEPWARM_SECONDS", "60"))
 
+SERVICE_TOKEN = os.getenv("RAG_ML_TOKEN", "")
+if os.getenv("RAG_ML_REQUIRE_TOKEN", "").lower() in {"1", "true", "yes", "on"} and not SERVICE_TOKEN:
+    raise RuntimeError("RAG_ML_TOKEN must be configured")
 app = FastAPI(title="Knowledge RAG ML Service", version="2.0-onnx-fp16")
+_inference_lock = threading.Lock()
+
+
+def require_service_token(x_rag_ml_token: str = Header(default="")) -> None:
+    if SERVICE_TOKEN and not hmac.compare_digest(
+        x_rag_ml_token.encode("utf-8"), SERVICE_TOKEN.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 _start_time = time.time()
 _warmup_elapsed_ms: int | None = None
 _keepwarm_last_ms: int | None = None
@@ -113,17 +125,21 @@ def _mean_pool(hidden: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
-    enc = embedding_tokenizer()(texts, return_tensors="np", padding=True, truncation=True, max_length=MAX_SEQ_EMBED)
-    hidden = embedding_session().run(["last_hidden_state"], _feed(embedding_session(), enc))[0]
-    return _mean_pool(hidden, enc["attention_mask"])
+    with _inference_lock:
+        enc = embedding_tokenizer()(texts, return_tensors="np", padding=True, truncation=True, max_length=MAX_SEQ_EMBED)
+        session = embedding_session()
+        hidden = session.run(["last_hidden_state"], _feed(session, enc))[0]
+        return _mean_pool(hidden, enc["attention_mask"])
 
 
 def rerank_pairs(query: str, texts: list[str]) -> np.ndarray:
-    enc = reranker_tokenizer()(
-        [query] * len(texts), texts, return_tensors="np", padding=True, truncation=True, max_length=MAX_SEQ_RERANK
-    )
-    logits = reranker_session().run(["logits"], _feed(reranker_session(), enc))[0]
-    return logits.reshape(len(texts), -1)[:, 0]
+    with _inference_lock:
+        enc = reranker_tokenizer()(
+            [query] * len(texts), texts, return_tensors="np", padding=True, truncation=True, max_length=MAX_SEQ_RERANK
+        )
+        session = reranker_session()
+        logits = session.run(["logits"], _feed(session, enc))[0]
+        return logits.reshape(len(texts), -1)[:, 0]
 
 
 @app.on_event("startup")
@@ -192,7 +208,7 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/embed", response_model=EmbedResponse)
+@app.post("/embed", response_model=EmbedResponse, dependencies=[Depends(require_service_token)])
 def embed(req: EmbedRequest) -> EmbedResponse:
     texts = _clean_texts(req.texts, MAX_TEXTS)
     if not texts:
@@ -210,7 +226,7 @@ def embed(req: EmbedRequest) -> EmbedResponse:
     )
 
 
-@app.post("/rerank", response_model=RerankResponse)
+@app.post("/rerank", response_model=RerankResponse, dependencies=[Depends(require_service_token)])
 def rerank(req: RerankRequest) -> RerankResponse:
     query = str(req.query or "").strip()
     texts = _clean_texts(req.texts, MAX_RERANK_TEXTS)

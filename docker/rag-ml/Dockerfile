@@ -6,7 +6,7 @@
 # tokenizers: no torch, no transformers model code, ~1.5 GB smaller image
 # and a much smaller resident set than the previous PyTorch runtime.
 #
-# The models live in a volume ($MODELS_DIR) so a restart does not re-export.
+# The runtime image includes the exported models in $MODELS_DIR.
 # ============================================================
 
 # ── Stage 1: export models to ONNX FP16 (needs torch) ──────
@@ -36,7 +36,7 @@ RUN uv pip install \
 RUN mkdir -p /models/onnx && python export_onnx_fp16.py /models/onnx
 
 # ── Stage 2: runtime — ONNX Runtime only (no torch) ────────
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim AS runtime-deps
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -58,11 +58,16 @@ RUN uv pip install \
       "transformers==4.46.3" \
       "numpy<2.0"
 
+FROM python:3.12-slim AS runtime
+ENV PYTHONUNBUFFERED=1 MODELS_DIR=/models/onnx
+COPY --from=runtime-deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=runtime-deps /usr/local/bin/uvicorn /usr/local/bin/uvicorn
+
 RUN apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Models exported in stage 1; the volume mounted at /models/onnx keeps them across restarts.
+# Models exported and quality-tested in stage 1.
 COPY --from=exporter /models/onnx /models/onnx
 
 COPY app.py /app/app.py

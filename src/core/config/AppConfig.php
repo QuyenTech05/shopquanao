@@ -17,6 +17,7 @@ final readonly class AppConfig
         public string $adminEmail = 'admin@gmail.com',
         public string $adminUser = '',
         public string $adminPassword = '',
+        public string $assetBaseUrl = '',
     ) {
     }
 
@@ -29,6 +30,7 @@ final readonly class AppConfig
             adminEmail: getenv('ADMIN_EMAIL') ?: 'admin@gmail.com',
             adminUser: getenv('ADMIN_USER') ?: '',
             adminPassword: getenv('ADMIN_PASSWORD') ?: '',
+            assetBaseUrl: getenv('ASSET_BASE_URL') ?: '',
         );
     }
 }

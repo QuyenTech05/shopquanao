@@ -64,7 +64,9 @@ class KnowledgeRetriever {
             'embedding_model' => $this->embeddingModel,
             'knowledge_version' => $this->config->knowledgeVersion,
             'preprocess' => self::PREPROCESS_VERSION,
-            'v' => 4,
+            'rerank_mode' => $this->config->knowledgeRerankMode,
+            'reranker_model' => $this->config->knowledgeRerankMode === 'rrf' ? '' : $this->config->knowledgeRerankerModel,
+            'v' => 6,
         ];
         $cached = Cache::getRetrieval($cacheParams);
         if (is_array($cached)) {
@@ -109,7 +111,9 @@ class KnowledgeRetriever {
         $result['collection'] = $this->collection;
         $result['cache_metrics'] = $this->cacheMetrics;
         $result['latency'] = $this->spans;
-        Cache::setRetrieval($cacheParams, $result);
+        if (!in_array($result['retrieval_mode'], ['lexical_fallback', 'hybrid_no_rerank'], true)) {
+            Cache::setRetrieval($cacheParams, $result);
+        }
         return $result;
     }
 
@@ -340,6 +344,14 @@ class KnowledgeRetriever {
             return ['results' => [], 'retrieval_mode' => 'hybrid_no_results'];
         }
 
+        if ($this->config->knowledgeRerankMode === 'rrf') {
+            return [
+                'results' => array_slice($this->withRetrievalMode($candidates, 'hybrid_rrf'), 0, $limit),
+                'retrieval_mode' => 'hybrid_rrf',
+                'reranker_model' => null,
+            ];
+        }
+
         $texts = array_map(fn($d) => trim(($d['title'] ?? '') . "\n" . ($d['content'] ?? '')), $candidates);
         $candidateIds = array_map(fn($d) => (string)($d['doc_key'] ?? $this->documentKey($d)), $candidates);
         $rerankCacheParams = [
@@ -350,21 +362,21 @@ class KnowledgeRetriever {
             'limit' => $limit,
         ];
         $response = Cache::getRerank($rerankCacheParams);
-        if (is_array($response)) {
+        if ($this->validRerankResponse($response, count($candidates))) {
             $this->cacheMetrics['rerank_cache_hit'] = true;
         } else {
             $payload = ['query' => $query, 'texts' => $texts];
             $start = microtime(true);
             $response = $this->requestRagMl('/rerank', $payload, $this->config->ragRerankTimeout);
             $this->spans['rerank_ms'] = (int)((microtime(true) - $start) * 1000);
-            if (is_array($response) && isset($response['sorted_indices'])) {
+            if ($this->validRerankResponse($response, count($candidates))) {
                 Cache::setRerank($rerankCacheParams, $response);
             }
         }
         if (!isset($this->spans['rerank_ms'])) {
             $this->spans['rerank_ms'] = 0;
         }
-        if (!is_array($response) || !isset($response['sorted_indices']) || !is_array($response['sorted_indices'])) {
+        if (!$this->validRerankResponse($response, count($candidates))) {
             return [
                 'results' => array_slice($this->withRetrievalMode($candidates, 'hybrid_no_rerank'), 0, $limit),
                 'retrieval_mode' => 'hybrid_no_rerank',
@@ -389,6 +401,31 @@ class KnowledgeRetriever {
         ];
     }
 
+    private function validRerankResponse(mixed $response, int $count): bool {
+        if (!is_array($response) || !is_array($response['sorted_indices'] ?? null)
+            || !$this->validNumericList($response['scores'] ?? null, $count)) {
+            return false;
+        }
+        $indices = $response['sorted_indices'];
+        if (!array_is_list($indices) || count($indices) !== $count) {
+            return false;
+        }
+        sort($indices);
+        return $indices === range(0, $count - 1);
+    }
+
+    private function validNumericList(mixed $values, int $count): bool {
+        if (!is_array($values) || !array_is_list($values) || count($values) !== $count) {
+            return false;
+        }
+        foreach ($values as $value) {
+            if ((!is_int($value) && !is_float($value)) || !is_finite((float)$value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private function withRetrievalMode(array $results, string $mode): array {
         foreach ($results as &$result) {
             $result['retrieval_mode'] = $mode;
@@ -402,7 +439,7 @@ class KnowledgeRetriever {
             return null;
         }
         $cached = Cache::getEmbedding($this->embeddingModel, self::PREPROCESS_VERSION, $text);
-        if ($cached !== null && count($cached) === self::VECTOR_SIZE) {
+        if ($this->validNumericList($cached, self::VECTOR_SIZE)) {
             $this->cacheMetrics['embedding_cache_hit'] = true;
             $this->spans['embedding_ms'] = 0;
             return array_map('floatval', $cached);
@@ -410,7 +447,7 @@ class KnowledgeRetriever {
         $start = microtime(true);
         $response = $this->requestRagMl('/embed', ['texts' => [$text]], $this->config->ragEmbedTimeout);
         $this->spans['embedding_ms'] = (int)((microtime(true) - $start) * 1000);
-        if (!is_array($response) || empty($response['embeddings'][0]) || !is_array($response['embeddings'][0])) {
+        if (!is_array($response) || !$this->validNumericList($response['embeddings'][0] ?? null, self::VECTOR_SIZE)) {
             return null;
         }
         $vector = array_map('floatval', $response['embeddings'][0]);
@@ -421,10 +458,18 @@ class KnowledgeRetriever {
 
     private function requestRagMl(string $path, array $payload, int $timeout): ?array {
         if ($this->ragMlUrl === null) return null;
+        $headers = ['Content-Type: application/json'];
+        if (parse_url($this->ragMlUrl, PHP_URL_SCHEME) === 'https' && $this->config->ragMlToken === null) {
+            error_log('HTTPS RAG-ML endpoint requires RAG_ML_TOKEN');
+            return null;
+        }
+        if ($this->config->ragMlToken !== null) {
+            $headers[] = 'X-RAG-ML-Token: ' . $this->config->ragMlToken;
+        }
         $ch = curl_init($this->ragMlUrl . $path);
         curl_setopt_array($ch, InternalHttp::CURL_OPTIONS + [
             CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_HTTPHEADER => $headers,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $timeout,
@@ -433,7 +478,7 @@ class KnowledgeRetriever {
         $raw = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
-        if ($raw === false || $raw === '' || $httpCode >= 400) return null;
+        if ($raw === false || $raw === '' || $httpCode < 200 || $httpCode >= 300) return null;
         $data = json_decode($raw, true);
         return is_array($data) ? $data : null;
     }

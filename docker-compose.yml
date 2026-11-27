@@ -65,11 +65,16 @@ services:
     build:
       context: .
     container_name: shop_quan_ao_app
-    env_file: .env
+    env_file: ${SHOP_ENV_FILE:-.env}
     restart: unless-stopped
     expose:
       - "8080"
     environment:
+      ASSET_BASE_URL: ${ASSET_BASE_URL:-}
+      PHP_FPM_PM_CONTROL: ondemand
+      PHP_FPM_PM_MAX_CHILDREN: ${PHP_FPM_PM_MAX_CHILDREN:-20}
+      PHP_FPM_MCP_MAX_CHILDREN: ${PHP_FPM_MCP_MAX_CHILDREN:-2}
+      PHP_OPCACHE_MEMORY_CONSUMPTION: ${PHP_OPCACHE_MEMORY_CONSUMPTION:-128}
       DB_HOST: db
       DB_NAME: shop_db
       DB_USER: shop_user
@@ -77,13 +82,16 @@ services:
       DB_CONNECT_RETRIES: 30
       FREE_SHIPPING_THRESHOLD: ${FREE_SHIPPING_THRESHOLD:-500000}
       FREESHIP_NUDGE_MAX_GAP: ${FREESHIP_NUDGE_MAX_GAP:-200000}
-      RERANKER_URL: http://reranker:8000
-      RAG_ML_URL: http://rag-ml:8000
+      RERANKER_URL: ${RERANKER_URL:-http://reranker:8000}
+      PRODUCT_RANKER_MODE: ${PRODUCT_RANKER_MODE:-tfidf}
+      RAG_ML_URL: ${RAG_ML_URL:-http://rag-ml:8000}
+      RAG_ML_TOKEN: ${RAG_ML_TOKEN:-}
       QDRANT_URL: http://qdrant:6333
       KNOWLEDGE_COLLECTION: shop_knowledge_v2
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-rag_ml}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bkai-foundation-models/vietnamese-bi-encoder}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+      KNOWLEDGE_RERANK_MODE: ${KNOWLEDGE_RERANK_MODE:-cross_encoder}
       KNOWLEDGE_RERANKER_MODEL: ${KNOWLEDGE_RERANKER_MODEL:-itdainb/PhoRanker}
       RAG_EMBED_TIMEOUT: ${RAG_EMBED_TIMEOUT:-8}
       RAG_RERANK_TIMEOUT: ${RAG_RERANK_TIMEOUT:-6}
@@ -94,7 +102,7 @@ services:
       REDIS_PREFIX: "shop:"
       CLIENT_CACHE_TTL: ${CLIENT_CACHE_TTL:-60}
       CLIENT_CACHE_STALE_TTL: ${CLIENT_CACHE_STALE_TTL:-30}
-      CHAT_GRAPH_URL: http://chat-graph:8090
+      CHAT_GRAPH_URL: ${CHAT_GRAPH_URL:-http://chat-graph:8090}
       CHAT_GRAPH_TOKEN: ${CHAT_GRAPH_TOKEN:-local-dev-chat-graph-secret-change-in-production}
       CHAT_GRAPH_TIMEOUT: ${CHAT_GRAPH_TIMEOUT:-50}
       MCP_SERVICE_TOKEN: ${MCP_SERVICE_TOKEN:-local-dev-mcp-secret-change-in-production}
@@ -122,7 +130,7 @@ services:
       context: .
       dockerfile: chat-graph/Dockerfile
     container_name: shop_quan_ao_chat_graph
-    env_file: .env
+    env_file: ${SHOP_ENV_FILE:-.env}
     restart: unless-stopped
     expose:
       - "8090"
@@ -134,14 +142,14 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-25}
       MCP_SERVICE_TOKEN: ${MCP_SERVICE_TOKEN:-local-dev-mcp-secret-change-in-production}
-      SHOP_INTERNAL_URL: http://app:8080/api/internal/mcp
+      SHOP_INTERNAL_URL: ${SHOP_INTERNAL_URL:-http://app:8080/api/internal/mcp}
       MCP_REQUEST_TIMEOUT_MS: 30000
       FREE_SHIPPING_THRESHOLD: ${FREE_SHIPPING_THRESHOLD:-500000}
       FREESHIP_NUDGE_MAX_GAP: ${FREESHIP_NUDGE_MAX_GAP:-200000}
       CHAT_GRAPH_MAX_TOOL_CALLS: ${CHAT_GRAPH_MAX_TOOL_CALLS:-4}
       CHAT_GRAPH_MAX_MODEL_CALLS: ${CHAT_GRAPH_MAX_MODEL_CALLS:-5}
       CHAT_GRAPH_TURN_TIMEOUT_MS: ${CHAT_GRAPH_TURN_TIMEOUT_MS:-45000}
-      # Langfuse stays opt-in (observability profile); the URL is only used when enabled.
+      # Cloud tracing is independent of the optional self-hosted observability profile.
       APP_ENV: ${APP_ENV:-development}
       LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
       LANGFUSE_INGESTION_URL: ${LANGFUSE_INGESTION_URL:-http://langfuse-web:3000}
@@ -154,6 +162,7 @@ services:
         condition: service_healthy
 
   reranker:
+    image: ${RERANKER_IMAGE:-shop_quan_ao-reranker:latest}
     build:
       context: docker/reranker
       dockerfile: Dockerfile
@@ -171,6 +180,7 @@ services:
     # No GPU needed — CPU inference only.
 
   rag-ml:
+    image: ${RAG_ML_IMAGE:-shop_quan_ao-rag-ml:latest}
     build:
       context: docker/rag-ml
       dockerfile: Dockerfile
@@ -181,19 +191,18 @@ services:
       KNOWLEDGE_RERANKER_MODEL: ${KNOWLEDGE_RERANKER_MODEL:-itdainb/PhoRanker}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
       # ONNX Runtime threads; 0 lets ORT pick from the host CPU count.
+      RAG_ML_TOKEN: ${RAG_ML_TOKEN:-}
       RAG_ML_THREADS: ${RAG_ML_THREADS:-0}
       RAG_ML_WARMUP_ON_START: ${RAG_ML_WARMUP_ON_START:-true}
       RAG_ML_KEEPWARM_SECONDS: ${RAG_ML_KEEPWARM_SECONDS:-60}
-      RAG_ML_MAX_TEXTS: 64
+      RAG_ML_MAX_TEXTS: ${RAG_ML_MAX_TEXTS:-64}
       RAG_ML_MAX_RERANK_TEXTS: ${RAG_ML_MAX_RERANK_TEXTS:-12}
       MODELS_DIR: /models/onnx
       HF_HOME: /models/huggingface
     expose:
       - "8000"
-    volumes:
-      # Model weights are baked into the image at build time; the volume only keeps
-      # the HF download cache so a rebuild on the host reuses it.
-      - rag_ml_models:/models
+    # Use the model weights baked into the tested image. A persistent mount over
+    # /models would hide new weights on subsequent image deployments.
     # Measured with the ONNX fp16 runtime: ~600 MB resident for both models.
     # The cap keeps the sidecar from starving MariaDB/php-fpm on a small VPS.
     deploy:
@@ -211,9 +220,9 @@ services:
   db:
     image: mariadb:10.11
     container_name: shop_quan_ao_db
-    env_file: .env
+    env_file: ${SHOP_ENV_FILE:-.env}
     restart: unless-stopped
-    command: ["--innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-512M}"]
+    command: ["--innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-512M}", "--max-connections=${MARIADB_MAX_CONNECTIONS:-151}"]
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root_pass}
       MARIADB_DATABASE: shop_db
@@ -236,7 +245,7 @@ services:
     image: redis:7-alpine
     container_name: shop_quan_ao_redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
     expose:
       - "6379"
     volumes:

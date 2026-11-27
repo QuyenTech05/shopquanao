@@ -14,6 +14,8 @@ FROM ${PHP_IMAGE} AS runtime
 ENV NGINX_HTTP_PORT=8080 \
     NGINX_WEBROOT=/var/www/html/public \
     PHP_OPCACHE_ENABLE=1 \
+    PHP_OPCACHE_MEMORY_CONSUMPTION=128 \
+    PHP_FPM_MCP_MAX_CHILDREN=2 \
     SHOW_WELCOME_MESSAGE=false
 
 WORKDIR /var/www/html
@@ -22,6 +24,7 @@ WORKDIR /var/www/html
 # continues serving root PHP pages and static assets.
 COPY docker/app-nginx-api.conf /etc/nginx/server-opts.d/api-router.conf
 COPY docker/php.ini /usr/local/etc/php/conf.d/zz-shop.ini
+COPY docker/php-fpm-mcp.conf /usr/local/etc/php-fpm.d/zz-shop-mcp.conf
 # php-fpm readiness polls until it answers (the base image gives up after 7s and never starts nginx).
 COPY --chmod=755 docker/app-php-fpm-run /etc/s6-overlay/s6-rc.d/php-fpm/run
 

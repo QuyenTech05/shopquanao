@@ -24,7 +24,8 @@ WORKDIR /app
 # and zod resolve from this single prod node_modules.
 COPY --from=build /build/chat-graph/package.json /build/chat-graph/package-lock.json ./
 COPY --from=build /build/chat-graph/node_modules ./node_modules
-COPY --from=build /build/chat-graph/dist ./dist
+COPY --from=build /build/chat-graph/dist/chat-graph/src ./dist/chat-graph/src
+COPY --from=build /build/chat-graph/dist/mcp-server/src ./dist/mcp-server/src
 USER node
 EXPOSE 8090
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
