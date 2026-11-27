@@ -277,33 +277,17 @@ jobs:
           docker build -t shop-rag-ml:ci-${{ github.sha }} docker/rag-ml/
           docker tag shop-rag-ml:ci-${{ github.sha }} shop-rag-ml:ci-latest
 
-      - name: Scan app image
+      - name: Scan all runtime images
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            shop-quan-ao:ci-${{ github.sha }}
-
-      - name: Scan reranker image
-        run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            shop-reranker:ci-${{ github.sha }}
-
-      - name: Scan chat-graph image
-        run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            shop-chat-graph:ci-${{ github.sha }}
-
-      - name: Scan rag-ml image
-        run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            shop-rag-ml:ci-${{ github.sha }}
+          scan_status=0
+          for image in shop-quan-ao shop-reranker shop-chat-graph shop-rag-ml; do
+            echo "Scanning $image"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+              --severity HIGH,CRITICAL \
+              --exit-code 1 \
+              "$image:ci-${GITHUB_SHA}" || scan_status=1
+          done
+          exit "$scan_status"
 
       - name: Publish tested commit images
         if: github.event_name == 'push'

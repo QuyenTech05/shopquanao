@@ -1,5 +1,5 @@
 # Production image: Alpine-based PHP-FPM + Nginx. The chatbot runs in the separate chat-graph image.
-ARG PHP_IMAGE=serversideup/php:8.2-fpm-nginx-alpine@sha256:45a19bc2818c3b56e10bf05b63a6361bb85a0081a16382cf04963b6f58124258
+ARG PHP_IMAGE=serversideup/php:8.2-fpm-nginx-alpine@sha256:7bd050d3b0a1983d71a8d6054bc33aaab131f85d0f1253dd322409cc98f08473
 ARG COMPOSER_IMAGE=composer:2.8
 
 FROM ${COMPOSER_IMAGE} AS php-deps
@@ -10,6 +10,11 @@ RUN composer install --no-dev --no-interaction --no-progress --no-scripts \
       --ignore-platform-reqs --classmap-authoritative
 
 FROM ${PHP_IMAGE} AS runtime
+
+# Apply the security-fixed libxml2 from the pinned Alpine release repository.
+USER root
+RUN apk upgrade --no-cache libxml2
+USER www-data
 
 ENV NGINX_HTTP_PORT=8080 \
     NGINX_WEBROOT=/var/www/html/public \
