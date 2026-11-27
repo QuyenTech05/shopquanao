@@ -26,12 +26,14 @@ final class ServiceConfigTest extends TestCase
 
         $this->assertNull($config->qdrantUrl);
         $this->assertNull($config->ragMlUrl);
+        $this->assertNull($config->ragMlToken);
         $this->assertSame('shop_knowledge_v2', $config->knowledgeCollection);
         $this->assertSame('rag_ml', $config->embeddingProvider);
         $this->assertSame('bkai-foundation-models/vietnamese-bi-encoder', $config->embeddingModel);
         $this->assertSame(8, $config->knowledgeHybridCandidates);
         $this->assertSame('v1', $config->knowledgeVersion);
         $this->assertSame('itdainb/PhoRanker', $config->knowledgeRerankerModel);
+        $this->assertSame('cross_encoder', $config->knowledgeRerankMode);
         $this->assertSame(6, $config->ragRerankTimeout);
         $this->assertSame(8, $config->ragEmbedTimeout);
         $this->assertSame('http://reranker:8000', $config->rerankerUrl);
@@ -44,12 +46,14 @@ final class ServiceConfigTest extends TestCase
         $values = [
             'QDRANT_URL' => 'http://qdrant:6333/',
             'RAG_ML_URL' => 'http://rag-ml:8001/',
+            'RAG_ML_TOKEN' => 'fixture-token',
             'KNOWLEDGE_COLLECTION' => 'kc',
             'EMBEDDING_PROVIDER' => 'local_hash',
             'EMBEDDING_MODEL' => 'em',
             'KNOWLEDGE_HYBRID_CANDIDATES' => '7',
             'KNOWLEDGE_VERSION' => 'v9',
             'KNOWLEDGE_RERANKER_MODEL' => 'rm',
+            'KNOWLEDGE_RERANK_MODE' => 'rrf',
             'RAG_RERANK_TIMEOUT' => '3',
             'RAG_EMBED_TIMEOUT' => '4',
             'RERANKER_URL' => 'http://rr:9000/',
@@ -64,17 +68,25 @@ final class ServiceConfigTest extends TestCase
 
         $this->assertSame('http://qdrant:6333', $config->qdrantUrl);
         $this->assertSame('http://rag-ml:8001', $config->ragMlUrl);
+        $this->assertSame('fixture-token', $config->ragMlToken);
         $this->assertSame('kc', $config->knowledgeCollection);
         $this->assertSame('local_hash', $config->embeddingProvider);
         $this->assertSame('em', $config->embeddingModel);
         $this->assertSame(7, $config->knowledgeHybridCandidates);
         $this->assertSame('v9', $config->knowledgeVersion);
         $this->assertSame('rm', $config->knowledgeRerankerModel);
+        $this->assertSame('rrf', $config->knowledgeRerankMode);
         $this->assertSame(3, $config->ragRerankTimeout);
         $this->assertSame(4, $config->ragEmbedTimeout);
         $this->assertSame('http://rr:9000/', $config->rerankerUrl);
         $this->assertSame(600000, $config->freeShippingThreshold);
         $this->assertSame(150000, $config->freeshipNudgeMaxGap);
+    }
+
+    public function testInvalidRerankModeFallsBackToCrossEncoder(): void
+    {
+        $this->setEnv('KNOWLEDGE_RERANK_MODE', 'invalid');
+        $this->assertSame('cross_encoder', ServiceConfig::fromEnvironment()->knowledgeRerankMode);
     }
 
     public function testKeepsEachKeysPreviousLookupSemantics(): void

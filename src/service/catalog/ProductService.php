@@ -10,9 +10,11 @@ final class ProductService
     private CategoryService $categoryList;
 
     private const SEARCH_CACHE_VERSION = 4;
+    private string $rankerMode;
 
     public function __construct(private PDO $pdo, private ?int $userId = null, private ?string $rerankerUrl = null)
     {
+        $this->rankerMode = ServiceConfig::productRankerModeFromEnvironment();
         $this->catalogVariants = new CatalogVariantHydrator($pdo);
         $this->productRows = new ProductRepository($pdo);
         $this->sizeRows = new SizeRepository($pdo);
@@ -43,6 +45,7 @@ final class ProductService
             'search' => $args['search'] ?? '',
             'sort' => 'price_asc',
             '_v' => self::SEARCH_CACHE_VERSION,
+            'ranker_mode' => $this->rankerMode,
         ];
         foreach (['category_id', 'category', 'subcategory', 'min_price', 'max_price', 'color', 'size', 'in_stock', 'material', 'style', 'occasion', 'avoid', 'semantic_query'] as $key) {
             if (array_key_exists($key, $args) && $args[$key] !== null && $args[$key] !== '') {
@@ -73,7 +76,7 @@ final class ProductService
         $result = $this->executeSearchProductsDirect($args);
 
         if (!isset($result['error']) && !empty($result['products'])) {
-            $result = (new ProductReranker($this->rerankerUrl))->apply($args['search'] ?? '', $result);
+            $result = (new ProductReranker($this->rerankerUrl, $this->rankerMode))->apply($args['search'] ?? '', $result);
         }
 
         if (!isset($result['error'])) {
@@ -459,7 +462,7 @@ final class ProductService
             unset($args['in_stock']);
             $matches = $this->executeSearchProductsDirect($args);
             if (!isset($matches['error']) && !empty($matches['products'])) {
-                $matches = (new ProductReranker($this->rerankerUrl))->apply($args['search'] ?? '', $matches);
+                $matches = (new ProductReranker($this->rerankerUrl, $this->rankerMode))->apply($args['search'] ?? '', $matches);
             }
             return array_values(array_map(fn($p) => (int)$p['id'], $matches['products'] ?? []));
         }

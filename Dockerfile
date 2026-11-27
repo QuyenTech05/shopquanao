@@ -1,5 +1,5 @@
 # Production image: Alpine-based PHP-FPM + Nginx. The chatbot runs in the separate chat-graph image.
-ARG PHP_IMAGE=serversideup/php:8.2-fpm-nginx-alpine@sha256:45a19bc2818c3b56e10bf05b63a6361bb85a0081a16382cf04963b6f58124258
+ARG PHP_IMAGE=serversideup/php:8.2-fpm-nginx-alpine@sha256:7bd050d3b0a1983d71a8d6054bc33aaab131f85d0f1253dd322409cc98f08473
 ARG COMPOSER_IMAGE=composer:2.8
 
 FROM ${COMPOSER_IMAGE} AS php-deps
@@ -11,9 +11,16 @@ RUN composer install --no-dev --no-interaction --no-progress --no-scripts \
 
 FROM ${PHP_IMAGE} AS runtime
 
+# Apply the security-fixed libxml2 from the pinned Alpine release repository.
+USER root
+RUN apk upgrade --no-cache libxml2
+USER www-data
+
 ENV NGINX_HTTP_PORT=8080 \
     NGINX_WEBROOT=/var/www/html/public \
     PHP_OPCACHE_ENABLE=1 \
+    PHP_OPCACHE_MEMORY_CONSUMPTION=128 \
+    PHP_FPM_MCP_MAX_CHILDREN=2 \
     SHOW_WELCOME_MESSAGE=false
 
 WORKDIR /var/www/html
@@ -22,6 +29,7 @@ WORKDIR /var/www/html
 # continues serving root PHP pages and static assets.
 COPY docker/app-nginx-api.conf /etc/nginx/server-opts.d/api-router.conf
 COPY docker/php.ini /usr/local/etc/php/conf.d/zz-shop.ini
+COPY docker/php-fpm-mcp.conf /usr/local/etc/php-fpm.d/zz-shop-mcp.conf
 # php-fpm readiness polls until it answers (the base image gives up after 7s and never starts nginx).
 COPY --chmod=755 docker/app-php-fpm-run /etc/s6-overlay/s6-rc.d/php-fpm/run
 

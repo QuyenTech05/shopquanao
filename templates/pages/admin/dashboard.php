@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Admin Dashboard</title>
-    <link rel="stylesheet" href="/assets/css/style.css">
+    <?php include __DIR__ . '/../../partials/stylesheet.php'; ?>
 </head>
 <body>
     <div style="display:flex; min-height:100vh;">

@@ -1,0 +1,68 @@
+# Requires Docker Compose v2.24.4+ for !reset. Always use with docker-compose.yml.
+services:
+  nginx:
+    cpus: ${NGINX_CPU_LIMIT:-0.25}
+    mem_limit: ${NGINX_MEMORY_LIMIT:-64m}
+    environment:
+      NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE: ""
+    healthcheck:
+      interval: 30s
+  app:
+    cpus: ${APP_CPU_LIMIT:-0.75}
+    mem_limit: ${APP_MEMORY_LIMIT:-256m}
+    environment:
+      APP_ENV: production
+      PHP_FPM_PM_MAX_CHILDREN: ${PHP_FPM_PM_MAX_CHILDREN:-2}
+      PHP_FPM_MCP_MAX_CHILDREN: ${PHP_FPM_MCP_MAX_CHILDREN:-1}
+      PHP_OPCACHE_MEMORY_CONSUMPTION: ${PHP_OPCACHE_MEMORY_CONSUMPTION:-64}
+      LANGFUSE_TRACE_CONTENT: "false"
+    healthcheck:
+      interval: 60s
+  chat-graph:
+    cpus: ${CHAT_GRAPH_CPU_LIMIT:-1.0}
+    mem_limit: ${CHAT_GRAPH_MEMORY_LIMIT:-320m}
+    environment:
+      APP_ENV: production
+      NODE_OPTIONS: --max-old-space-size=${CHAT_GRAPH_HEAP_MB:-192}
+      LANGFUSE_TRACE_CONTENT: "false"
+    healthcheck:
+      interval: 30s
+  rag-ml:
+    deploy:
+      resources:
+        limits:
+          cpus: ${RAG_ML_CPU_LIMIT:-1.0}
+          memory: ${RAG_ML_MEMORY_LIMIT:-1g}
+    environment:
+      RAG_ML_THREADS: ${RAG_ML_THREADS:-1}
+      RAG_ML_KEEPWARM_SECONDS: ${RAG_ML_KEEPWARM_SECONDS:-300}
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    healthcheck:
+      interval: 60s
+      start_period: 120s
+  reranker:
+    cpus: ${RERANKER_CPU_LIMIT:-0.5}
+    mem_limit: ${RERANKER_MEMORY_LIMIT:-192m}
+    ports: !reset []
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    healthcheck:
+      interval: 60s
+  db:
+    cpus: ${MARIADB_CPU_LIMIT:-0.75}
+    mem_limit: ${MARIADB_MEMORY_LIMIT:-384m}
+    ports: !reset []
+    command: ["--innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-256M}", "--max-connections=${MARIADB_MAX_CONNECTIONS:-30}"]
+    healthcheck:
+      interval: 10s
+  redis:
+    cpus: ${REDIS_CPU_LIMIT:-0.25}
+    mem_limit: ${REDIS_MEMORY_LIMIT:-96m}
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-64mb}", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      interval: 30s
+  qdrant:
+    cpus: ${QDRANT_CPU_LIMIT:-0.5}
+    mem_limit: ${QDRANT_MEMORY_LIMIT:-256m}

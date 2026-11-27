@@ -40,7 +40,9 @@ final class PromptCache
     public function keyFor(string $message, array $history, string $summary, array $slots): string
     {
         $payload = json_encode([
-            'v' => 1, // bump to invalidate every stored answer after a key-shape change
+            'v' => 2,
+            'knowledge_rerank_mode' => ServiceConfig::knowledgeRerankModeFromEnvironment(),
+            'product_ranker_mode' => ServiceConfig::productRankerModeFromEnvironment(),
             'message' => $message,
             'history' => $history,
             'summary' => $summary,
