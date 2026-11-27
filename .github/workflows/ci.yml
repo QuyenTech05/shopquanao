@@ -13,6 +13,8 @@ concurrency:
 
 env:
   PHP_VERSION: '8.2'
+  # Official Trivy v0.76.2 (linux/amd64), pinned to an immutable manifest.
+  TRIVY_IMAGE: ghcr.io/aquasecurity/trivy@sha256:6fa071ef8daa2e58b90cbf1710bedca91adbb3bf98693533226f442035b836a6
 
 jobs:
   # ============================================================
@@ -218,7 +220,7 @@ jobs:
 
       - name: Trivy filesystem scan
         run: |
-          docker run --rm -v $PWD:/src aquasecurity/trivy:latest fs \
+          docker run --rm -v $PWD:/src "$TRIVY_IMAGE" fs \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             --skip-dirs vendor \
@@ -277,28 +279,28 @@ jobs:
 
       - name: Scan app image
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-quan-ao:ci-${{ github.sha }}
 
       - name: Scan reranker image
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-reranker:ci-${{ github.sha }}
 
       - name: Scan chat-graph image
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-chat-graph:ci-${{ github.sha }}
 
       - name: Scan rag-ml image
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             shop-rag-ml:ci-${{ github.sha }}
